@@ -7,13 +7,36 @@ create table if not exists public.customers (
   phone text,
   address text,
   last_product text,
+  last_product_notes text,
   last_intent text,
   conversation_summary text,
   order_status text default 'not_started',
   human_handoff boolean not null default false,
+  price_given_at timestamptz,
+  last_customer_message_at timestamptz,
+  last_language_style text,
+  followup_1_sent boolean not null default false,
+  followup_1_sent_at timestamptz,
+  followup_2_sent boolean not null default false,
+  followup_2_sent_at timestamptz,
+  followup_3_sent boolean not null default false,
+  followup_3_sent_at timestamptz,
+  last_followup_angle text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table if exists public.customers add column if not exists last_product_notes text;
+alter table if exists public.customers add column if not exists price_given_at timestamptz;
+alter table if exists public.customers add column if not exists last_customer_message_at timestamptz;
+alter table if exists public.customers add column if not exists last_language_style text;
+alter table if exists public.customers add column if not exists followup_1_sent boolean not null default false;
+alter table if exists public.customers add column if not exists followup_1_sent_at timestamptz;
+alter table if exists public.customers add column if not exists followup_2_sent boolean not null default false;
+alter table if exists public.customers add column if not exists followup_2_sent_at timestamptz;
+alter table if exists public.customers add column if not exists followup_3_sent boolean not null default false;
+alter table if exists public.customers add column if not exists followup_3_sent_at timestamptz;
+alter table if exists public.customers add column if not exists last_followup_angle text;
 
 create table if not exists public.messages (
   id bigint generated always as identity primary key,

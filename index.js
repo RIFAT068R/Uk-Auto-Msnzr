@@ -7,7 +7,7 @@ const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
-const modelName = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const modelName = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
 
 console.log('Using Gemini model:', modelName);
 

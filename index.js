@@ -322,18 +322,27 @@ async function generateAIReply({ senderPsid, messageText, customer, recentMessag
     'If customer writes in English, reply in English.',
     'If customer writes in Banglish, reply in Banglish.',
     'If customer mixes Bangla and English, reply naturally in mixed Bangla-English.',
-    'If customer asks for price and product is known, give the price immediately.',
+    'Answer exactly what the customer asks first.',
+    'If customer asks only for price and product is known, give only product name, size if known, price, trust point, and a soft CTA.',
+    'Do not include delivery charge in a price-only reply unless delivery, total, or order intent is present.',
+    'If customer asks delivery charge, reply with delivery info only.',
+    'If customer asks price and delivery together, include both price and delivery.',
+    'If customer asks available, reply with availability, trust point, and ask if they want the price.',
     'Do not ask for quantity before giving price.',
     'Do not ask for screenshot if product is already clear.',
-    'If product is matched, include price, stock, delivery charge, authenticity proof, and a soft buying CTA.',
+    'If product is matched, keep the reply short, natural, and human, never overloaded.',
     'Use the line 100% original UK product with proof naturally when relevant.',
     'If product is unclear, ask only one short clarification question.',
     'If customer seems interested, guide them gently toward order confirmation.',
     'If customer asks which one do you have, list matching available products.',
-    'If customer asks available, answer stock clearly.',
-    'Treat these as price intent: price, dam, দাম, koto, কত, price koto, দাম কত, কত টাকা.',
-    'Treat these as order intent: order, confirm, nibo, নিবো, লাগবে, নিতে চাই, book koren, reserve.',
-    'Treat these as availability intent: available, ache, আছে, stock, ase, আছে নাকি.',
+    'Use deterministic intent values passed in the prompt: availability, price, delivery, total, order, proof, general.',
+    'Treat these as price intent: price, dam, দাম, koto, কত, price koto.',
+    'Treat these as delivery intent: delivery, delivery charge, shipping, courier, inside dhaka, outside dhaka, ঢাকায়, ঢাকার বাইরে, ডেলিভারি, ডেলিভারি চার্জ.',
+    'Treat these as total intent: total, মোট কত, mot koto, full total, sob mile, shob mile.',
+    'Treat these as proof intent: proof, authenticity, authentic, original.',
+    'Treat these as order intent: order, confirm order, order korte chai, nibo, নিবো, লাগবে, নিতে চাই, reserve.',
+    'Treat these as availability intent: do you have, available, stock ache, ache, আছে, ase.',
+    'If includeDelivery is false, you are strictly forbidden from mentioning delivery charges.',
     'If customer says confirm, order, nibo, or lagbe, collect name, phone, address, product, and quantity.',
     'Never invent price, stock, offer, delivery date, or discount.',
     'If information is missing from product data, say the team will confirm.',
@@ -342,7 +351,9 @@ async function generateAIReply({ senderPsid, messageText, customer, recentMessag
     'Do not use too many emojis.',
     'Keep product names in English exactly as stored in product data.',
     'Keep prices and delivery charges clear with the ৳ symbol.',
-    'Best reply format when product is known: Yes, [Product Name] is available ✅ Price: ৳[Price] Delivery: Dhaka ৳[Inside], outside Dhaka ৳[Outside] It\'s 100% original UK product with proof. Would you like me to reserve 1 piece for you?',
+    'Availability template: Yes, [Product Name] is available ✅ It\'s 100% original UK product with proof. Would you like to know the price?',
+    'Price template: Yes, [Product Name] is available ✅ Price: ৳[Price] 100% original UK product with proof. Would you like me to show proof or reserve 1 piece?',
+    'Delivery template: Delivery charge: Dhaka ৳[Delivery Inside], outside Dhaka ৳[Delivery Outside].',
     'If complaint, refund, damaged product, wrong product, or serious issue appears, apologize and set human_handoff=true.',
     'If discount is requested, respond politely without fake promises.',
     'Use light emojis only when natural: ✅ 😊',
@@ -358,6 +369,8 @@ async function generateAIReply({ senderPsid, messageText, customer, recentMessag
   const promptPayload = {
     customer_psid: senderPsid,
     detected_language_style: languageStyle,
+    intent: productData.intent,
+    includeDelivery: shouldIncludeDelivery(productData.intent, messageText),
     current_message: messageText,
     customer_memory: {
       full_name: customer.full_name,
@@ -717,7 +730,7 @@ async function getProductContext(messageText, customer) {
     const intent = detectIntent(messageText);
     let matches = rankProductMatches(products, messageText, customer.last_product).slice(0, 5);
 
-    if (!matches.length && intent === 'list_products') {
+    if (!matches.length && intent === 'general' && isListRequest(messageText)) {
       matches = products.slice(0, 5);
     }
 
@@ -751,7 +764,7 @@ function buildDirectSalesReply(messageText, customer, productData) {
     return null;
   }
 
-  if (intent === 'list_products' && productData.matches?.length) {
+  if (intent === 'general' && isListRequest(messageText) && productData.matches?.length) {
     const reply = formatProductListReply(productData.matches, languageStyle);
 
     return {
@@ -769,7 +782,7 @@ function buildDirectSalesReply(messageText, customer, productData) {
     };
   }
 
-  if (!matchedProduct && intent === 'price_query' && customer.last_product) {
+  if (!matchedProduct && intent === 'price' && customer.last_product) {
     return {
       reply: getKnownProductPriceFallback(customer.last_product, languageStyle),
       memory: {
@@ -786,7 +799,7 @@ function buildDirectSalesReply(messageText, customer, productData) {
   }
 
   if (!matchedProduct) {
-    if (intent === 'size_query') {
+    if (looksLikeSizeOnly(messageText)) {
       return {
         reply: getSizeClarificationReply(languageStyle),
         memory: {
@@ -804,7 +817,7 @@ function buildDirectSalesReply(messageText, customer, productData) {
     return null;
   }
 
-  if (intent === 'order_intent') {
+  if (intent === 'order') {
     return {
       reply: getOrderCollectionReply(languageStyle),
       memory: {
@@ -821,7 +834,7 @@ function buildDirectSalesReply(messageText, customer, productData) {
     };
   }
 
-  if (intent === 'price_query' || intent === 'size_query' || intent === 'product_query' || intent === 'availability_query' || intent === 'delivery_query' || intent === 'total_query' || intent === 'proof_query') {
+  if (intent === 'price' || intent === 'availability' || intent === 'delivery' || intent === 'total' || intent === 'proof' || intent === 'general') {
     return {
       reply: formatProductSalesReply(matchedProduct, languageStyle, intent, messageText, customer),
       memory: {
@@ -878,7 +891,7 @@ function buildPriceFollowupState(productData, aiResult, languageStyle) {
   const matchedProduct = productData?.matchedProduct || null;
   const productName = matchedProduct?.display_name || aiResult.order?.product_name || null;
   const productPrice = getField(matchedProduct || {}, 'price', 'regular_price', 'sale_price');
-  const priceGiven = Boolean(productName && productPrice && (productData?.intent === 'price_query' || /৳|price\s*:/i.test(aiResult.reply || '')));
+  const priceGiven = Boolean(productName && productPrice && (productData?.intent === 'price' || /৳|price\s*:|দাম\s*:/i.test(aiResult.reply || '')));
 
   return {
     priceGiven,
@@ -1213,39 +1226,31 @@ function enrichProductRow(product) {
 function detectIntent(messageText) {
   const text = String(messageText || '').toLowerCase();
 
-  if (/(which one|what do you have|ki ki ache|ki ache|available products|show products)/i.test(text)) {
-    return 'list_products';
+  if (/(order|confirm order|order korte chai|reserve|lagbe|লাগবে|nibo|নিবো|nite chai|নিতে চাই|confirm)/i.test(text)) {
+    return 'order';
+  }
+
+  if (/(total|মোট কত|mot koto|full total|sob mile|shob mile)/i.test(text)) {
+    return 'total';
+  }
+
+  if (/(delivery charge|delivery|shipping|courier|inside dhaka|outside dhaka|ঢাকায়|ঢাকার বাইরে|ডেলিভারি|ডেলিভারি চার্জ)/i.test(text)) {
+    return 'delivery';
   }
 
   if (/(price koto|দাম কত|কত টাকা|price|dam|দাম|koto|কত)/i.test(text)) {
-    return 'price_query';
+    return 'price';
   }
 
-  if (/(delivery charge|delivery|shipping|courier|dhaka|outside dhaka|location|address|delivery koto)/i.test(text)) {
-    return 'delivery_query';
+  if (/(proof|authenticity|authentic|original naki|original)/i.test(text)) {
+    return 'proof';
   }
 
-  if (/(total|mot koto|full total|sob mile|shob mile)/i.test(text)) {
-    return 'total_query';
+  if (/(do you have|available|stock ache|ache|আছে|ase|আছে নাকি)/i.test(text)) {
+    return 'availability';
   }
 
-  if (/(proof|authenticity|authentic|original naki|original\)/i.test(text)) {
-    return 'proof_query';
-  }
-
-  if (/(available|ache|আছে|stock|ase|আছে নাকি)/i.test(text)) {
-    return 'availability_query';
-  }
-
-  if (/\b\d+\s?(ml|gm|g|kg|l|oz|pcs|pc)\b/i.test(text)) {
-    return 'size_query';
-  }
-
-  if (/(order|reserve|book koren|book|lagbe|লাগবে|nibo|নিবো|nite chai|নিতে চাই|nbo|confirm)/i.test(text)) {
-    return 'order_intent';
-  }
-
-  return 'product_query';
+  return 'general';
 }
 
 function rankProductMatches(products, messageText, lastProduct) {
@@ -1332,18 +1337,14 @@ function formatProductSalesReply(product, languageStyle, intent, messageText, cu
   const trustText = getTrustLine(languageStyle);
   const softPriceCta = getPriceSoftCta(languageStyle);
   const reserveCta = getReserveCta(languageStyle, intent);
-  const wantsDelivery = intent === 'delivery_query';
-  const wantsTotal = intent === 'total_query';
-  const wantsProof = intent === 'proof_query';
-  const wantsAvailability = intent === 'availability_query';
-  const priceOnly = intent === 'price_query';
+  const wantsDelivery = intent === 'delivery';
+  const wantsTotal = intent === 'total';
+  const wantsProof = intent === 'proof';
+  const wantsAvailability = intent === 'availability';
+  const priceOnly = intent === 'price';
 
   if (wantsDelivery) {
-    return [
-      delivery || getDeliveryUnavailableReply(languageStyle),
-      trustText,
-      getDeliveryFollowupCta(languageStyle)
-    ].filter(Boolean).join('\n');
+    return delivery || getDeliveryUnavailableReply(languageStyle);
   }
 
   if (wantsTotal) {
@@ -1366,13 +1367,12 @@ function formatProductSalesReply(product, languageStyle, intent, messageText, cu
   if (wantsAvailability) {
     return [
       availableLine,
-      stockText,
       trustText,
       getAvailabilityFollowupCta(languageStyle)
     ].filter(Boolean).join('\n');
   }
 
-  if (priceOnly || intent === 'size_query') {
+  if (priceOnly || looksLikeSizeOnly(messageText)) {
     return [
       availableLine,
       null,
@@ -1385,7 +1385,7 @@ function formatProductSalesReply(product, languageStyle, intent, messageText, cu
   return [
     availableLine,
     priceText,
-    shouldIncludeDeliveryForIntent(intent, messageText, customer) ? delivery : null,
+    shouldIncludeDelivery(intent, messageText) ? delivery : null,
     trustText,
     stock ? getScarcityLine(languageStyle) : null,
     reserveCta
@@ -1427,19 +1427,19 @@ function formatDeliveryCharge(product, languageStyle) {
 
   if (dhaka && outsideDhaka) {
     return getTextByLanguage(languageStyle, {
-      english: `Delivery: Dhaka ${dhaka}, outside Dhaka ${outsideDhaka}`,
-      bangla: `ডেলিভারি: ঢাকা ${dhaka}, ঢাকার বাইরে ${outsideDhaka}`,
-      banglish: `Delivery: Dhaka ${dhaka}, outside Dhaka ${outsideDhaka}`,
-      mixed: `ডেলিভারি: Dhaka ${dhaka}, outside Dhaka ${outsideDhaka}`
+      english: `Delivery charge: Dhaka ${dhaka}, outside Dhaka ${outsideDhaka}.`,
+      bangla: `ডেলিভারি চার্জ: ঢাকা ${dhaka}, ঢাকার বাইরে ${outsideDhaka}.`,
+      banglish: `Delivery charge: Dhaka ${dhaka}, outside Dhaka ${outsideDhaka}.`,
+      mixed: `ডেলিভারি চার্জ: Dhaka ${dhaka}, outside Dhaka ${outsideDhaka}.`
     });
   }
 
   if (single) {
     return getTextByLanguage(languageStyle, {
-      english: `Delivery: ${single}`,
-      bangla: `ডেলিভারি: ${single}`,
-      banglish: `Delivery: ${single}`,
-      mixed: `ডেলিভারি: ${single}`
+      english: `Delivery charge: ${single}.`,
+      bangla: `ডেলিভারি চার্জ: ${single}.`,
+      banglish: `Delivery charge: ${single}.`,
+      mixed: `ডেলিভারি চার্জ: ${single}.`
     });
   }
 
@@ -1590,7 +1590,7 @@ function getScarcityLine(languageStyle) {
 }
 
 function getReserveCta(languageStyle, intent) {
-  const key = intent === 'size_query' ? 'size' : 'default';
+  const key = 'default';
   const variants = {
     default: {
       english: 'Would you like me to reserve 1 piece for you?',
@@ -1681,12 +1681,20 @@ function getOrderCollectionReply(languageStyle) {
   });
 }
 
-function shouldIncludeDeliveryForIntent(intent, messageText, customer) {
-  return intent === 'delivery_query'
-    || intent === 'total_query'
-    || intent === 'order_intent'
-    || /delivery|shipping|courier|dhaka|location|address/i.test(messageText || '')
-    || Boolean(customer?.address);
+function shouldIncludeDelivery(intent, messageText) {
+  if (intent === 'delivery' || intent === 'total' || intent === 'order') {
+    return true;
+  }
+
+  return /(delivery|delivery charge|shipping|courier|inside dhaka|outside dhaka|ঢাকায়|ঢাকার বাইরে|ডেলিভারি|ডেলিভারি চার্জ|total|মোট কত)/i.test(messageText || '');
+}
+
+function isListRequest(text) {
+  return /(which one|what do you have|ki ki ache|ki ache|available products|show products)/i.test(text || '');
+}
+
+function looksLikeSizeOnly(text) {
+  return /\b\d+\s?(ml|gm|g|kg|l|oz|pcs|pc)\b/i.test(text || '');
 }
 
 function getProductListIntro(languageStyle) {

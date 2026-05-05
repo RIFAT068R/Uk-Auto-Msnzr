@@ -804,9 +804,26 @@ function buildDirectSalesReply(messageText, customer, productData) {
     return null;
   }
 
-  if (intent === 'price_query' || intent === 'size_query' || intent === 'product_query' || intent === 'availability_query') {
+  if (intent === 'order_intent') {
     return {
-      reply: formatProductSalesReply(matchedProduct, languageStyle, intent),
+      reply: getOrderCollectionReply(languageStyle),
+      memory: {
+        last_product: matchedProduct.display_name,
+        last_intent: intent,
+        conversation_summary: `Started order collection for ${matchedProduct.display_name}`,
+        human_handoff: false,
+        order_status: 'collecting_details'
+      },
+      order: {
+        product_name: matchedProduct.display_name,
+        quantity: null
+      }
+    };
+  }
+
+  if (intent === 'price_query' || intent === 'size_query' || intent === 'product_query' || intent === 'availability_query' || intent === 'delivery_query' || intent === 'total_query' || intent === 'proof_query') {
+    return {
+      reply: formatProductSalesReply(matchedProduct, languageStyle, intent, messageText, customer),
       memory: {
         last_product: matchedProduct.display_name,
         last_intent: intent,
@@ -1204,6 +1221,18 @@ function detectIntent(messageText) {
     return 'price_query';
   }
 
+  if (/(delivery charge|delivery|shipping|courier|dhaka|outside dhaka|location|address|delivery koto)/i.test(text)) {
+    return 'delivery_query';
+  }
+
+  if (/(total|mot koto|full total|sob mile|shob mile)/i.test(text)) {
+    return 'total_query';
+  }
+
+  if (/(proof|authenticity|authentic|original naki|original\)/i.test(text)) {
+    return 'proof_query';
+  }
+
   if (/(available|ache|আছে|stock|ase|আছে নাকি)/i.test(text)) {
     return 'availability_query';
   }
@@ -1292,7 +1321,7 @@ function getField(product, ...keys) {
   return null;
 }
 
-function formatProductSalesReply(product, languageStyle, intent) {
+function formatProductSalesReply(product, languageStyle, intent, messageText, customer) {
   const name = product.display_name;
   const price = getField(product, 'price', 'regular_price', 'sale_price');
   const stock = getField(product, 'stock', 'availability', 'status');
@@ -1301,20 +1330,66 @@ function formatProductSalesReply(product, languageStyle, intent) {
   const priceText = getPriceLine(name, price, languageStyle);
   const stockText = stock ? getStockLine(stock, languageStyle) : null;
   const trustText = getTrustLine(languageStyle);
-  const scarcityText = stock ? getScarcityLine(languageStyle) : null;
-  const ctaText = getReserveCta(languageStyle, intent);
+  const softPriceCta = getPriceSoftCta(languageStyle);
+  const reserveCta = getReserveCta(languageStyle, intent);
+  const wantsDelivery = intent === 'delivery_query';
+  const wantsTotal = intent === 'total_query';
+  const wantsProof = intent === 'proof_query';
+  const wantsAvailability = intent === 'availability_query';
+  const priceOnly = intent === 'price_query';
+
+  if (wantsDelivery) {
+    return [
+      delivery || getDeliveryUnavailableReply(languageStyle),
+      trustText,
+      getDeliveryFollowupCta(languageStyle)
+    ].filter(Boolean).join('\n');
+  }
+
+  if (wantsTotal) {
+    return [
+      availableLine,
+      priceText,
+      delivery || getDeliveryUnavailableReply(languageStyle),
+      getTotalFollowupReply(languageStyle, customer?.address)
+    ].filter(Boolean).join('\n');
+  }
+
+  if (wantsProof) {
+    return [
+      availableLine,
+      trustText,
+      getProofOfferReply(languageStyle)
+    ].filter(Boolean).join('\n');
+  }
+
+  if (wantsAvailability) {
+    return [
+      availableLine,
+      stockText,
+      trustText,
+      getAvailabilityFollowupCta(languageStyle)
+    ].filter(Boolean).join('\n');
+  }
+
+  if (priceOnly || intent === 'size_query') {
+    return [
+      availableLine,
+      null,
+      priceText,
+      trustText,
+      softPriceCta
+    ].filter(Boolean).join('\n');
+  }
 
   return [
     availableLine,
     priceText,
-    stockText,
-    delivery,
+    shouldIncludeDeliveryForIntent(intent, messageText, customer) ? delivery : null,
     trustText,
-    scarcityText,
-    ctaText
-  ]
-    .filter(Boolean)
-    .join('\n');
+    stock ? getScarcityLine(languageStyle) : null,
+    reserveCta
+  ].filter(Boolean).join('\n');
 }
 
 function formatProductListReply(products, languageStyle) {
@@ -1532,6 +1607,86 @@ function getReserveCta(languageStyle, intent) {
   };
 
   return getTextByLanguage(languageStyle, variants[key]);
+}
+
+function getPriceSoftCta(languageStyle) {
+  return getTextByLanguage(languageStyle, {
+    english: 'Would you like me to show you the proof or reserve 1 piece?',
+    bangla: 'আপনি চাইলে proof দেখাতে পারি অথবা ১ পিস reserve করে দিতে পারি।',
+    banglish: 'Chaile proof dekhate pari or 1 piece reserve kore dite pari.',
+    mixed: 'আপনি চাইলে proof দেখাতে পারি অথবা 1 piece reserve করে দিতে পারি।'
+  });
+}
+
+function getAvailabilityFollowupCta(languageStyle) {
+  return getTextByLanguage(languageStyle, {
+    english: 'Would you like the price as well?',
+    bangla: 'চাইলে দামটাও জানিয়ে দিচ্ছি।',
+    banglish: 'Chaile price tao janiye dicchi.',
+    mixed: 'চাইলে price tao জানিয়ে দিচ্ছি।'
+  });
+}
+
+function getProofOfferReply(languageStyle) {
+  return getTextByLanguage(languageStyle, {
+    english: 'I can show you the proof before you decide.',
+    bangla: 'আপনি চাইলে confirm করার আগে proof দেখাতে পারি।',
+    banglish: 'Chaile confirm korar age proof dekhate pari.',
+    mixed: 'আপনি চাইলে confirm করার আগে proof দেখাতে পারি।'
+  });
+}
+
+function getDeliveryFollowupCta(languageStyle) {
+  return getTextByLanguage(languageStyle, {
+    english: 'If you want, I can also share the price or keep 1 piece reserved for you.',
+    bangla: 'চাইলে আমি দামটাও জানাতে পারি বা ১ পিস reserve করে রাখতে পারি।',
+    banglish: 'Chaile ami price tao janate pari ba 1 piece reserve kore rakhte pari.',
+    mixed: 'চাইলে আমি price tao জানাতে পারি বা 1 piece reserve করে রাখতে পারি।'
+  });
+}
+
+function getDeliveryUnavailableReply(languageStyle) {
+  return getTextByLanguage(languageStyle, {
+    english: 'I need to confirm the latest delivery charge from our team.',
+    bangla: 'Latest delivery charge team থেকে confirm করতে হবে।',
+    banglish: 'Latest delivery charge team theke confirm korte hobe.',
+    mixed: 'Latest delivery charge team থেকে confirm করতে হবে।'
+  });
+}
+
+function getTotalFollowupReply(languageStyle, address) {
+  if (address) {
+    return getTextByLanguage(languageStyle, {
+      english: 'If you share the exact location, I can confirm the full total properly.',
+      bangla: 'Exact location দিলে full totalটা ঠিকভাবে confirm করে দিতে পারি।',
+      banglish: 'Exact location dile full total ta thikvabe confirm kore dite pari.',
+      mixed: 'Exact location দিলে full totalটা ঠিকভাবে confirm kore dite pari.'
+    });
+  }
+
+  return getTextByLanguage(languageStyle, {
+    english: 'Share your location and I will confirm the full total for you.',
+    bangla: 'Location দিলে full totalটা confirm করে দিতে পারি।',
+    banglish: 'Location dile full total ta confirm kore dite pari.',
+    mixed: 'Location দিলে full totalটা confirm kore dite pari.'
+  });
+}
+
+function getOrderCollectionReply(languageStyle) {
+  return getTextByLanguage(languageStyle, {
+    english: 'Perfect. Please send your name, phone number, full address, and quantity.',
+    bangla: 'ঠিক আছে। আপনার name, phone number, full address আর quantity পাঠিয়ে দিন।',
+    banglish: 'Thik ache. Apnar name, phone number, full address ar quantity pathiye din.',
+    mixed: 'ঠিক আছে। আপনার name, phone number, full address আর quantity pathiye din.'
+  });
+}
+
+function shouldIncludeDeliveryForIntent(intent, messageText, customer) {
+  return intent === 'delivery_query'
+    || intent === 'total_query'
+    || intent === 'order_intent'
+    || /delivery|shipping|courier|dhaka|location|address/i.test(messageText || '')
+    || Boolean(customer?.address);
 }
 
 function getProductListIntro(languageStyle) {

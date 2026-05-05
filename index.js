@@ -7,6 +7,9 @@ const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
+const modelName = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+
+console.log('Using Gemini model:', modelName);
 
 const REQUIRED_ENV_VARS = [
   'PAGE_ACCESS_TOKEN',
@@ -264,6 +267,11 @@ async function generateAIReply({ senderPsid, messageText, customer, recentMessag
     'Return valid JSON only with this shape: {"reply":"string","memory":{"full_name":null,"phone":null,"address":null,"last_product":null,"last_intent":null,"conversation_summary":null,"order_status":null,"human_handoff":false},"order":{"product_name":null,"quantity":null}}'
   ].join(' ');
 
+  const model = {
+    model: modelName,
+    systemInstruction
+  };
+
   const promptPayload = {
     customer_psid: senderPsid,
     current_message: messageText,
@@ -289,14 +297,14 @@ async function generateAIReply({ senderPsid, messageText, customer, recentMessag
   try {
     // Gemini is asked to return JSON only so memory can be updated safely.
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model.model)}:generateContent?key=${process.env.GEMINI_API_KEY}`,
       {
         contents: [
           {
             role: 'user',
             parts: [
               {
-                text: `${systemInstruction}\n\nConversation data:\n${JSON.stringify(promptPayload, null, 2)}`
+                text: `${model.systemInstruction}\n\nConversation data:\n${JSON.stringify(promptPayload, null, 2)}`
               }
             ]
           }
